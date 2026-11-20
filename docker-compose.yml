@@ -1,0 +1,94 @@
+version: "3.9"
+
+services:
+  nginx:
+    image: nginx:1.31.9
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+    container_name: nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    deploy:
+      restart_policy:
+        condition: on-failure  # <--- équivalent à "Any"
+        delay: 20s             # <--- délai entre tentatives de restart
+        max_attempts: 3       # <--- 0 = tentatives illimitées (défaut)
+        window: 120s            # <--- durée de la fenêtre pour compter les tentatives
+    # S'assurer que Nginx reste en foreground
+    command: [ "nginx", "-g", "daemon off;" ]
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - certs_ssl:/etc/ssl
+      - nginx-80_443:/etc/nginx
+      - nginx-logs:/var/log/nginx
+    networks:
+      - owncloudnet
+      - nginx
+
+  nextcloud-heartbeat:
+    image: curlimages/curl:8.12.1
+    container_name: betterstack-heartbeat
+    environment:
+      HEARTBEAT_URL: "https://uptime.betterstack.com/api/v1/heartbeat/jvsp573XYGoGbo9NdjMqPmaA"
+      CHECK_URL: "http://nextcloud-apache/status.php"
+      INTERVAL: "60"
+    command:
+      - sh
+      - -c
+      - |
+          while true; do
+            BODY="$$(curl -fsS --max-time 10 "$$CHECK_URL" 2>/dev/null || true)"
+
+            echo "$$BODY" | grep -Fq '"installed":true' &&
+            echo "$$BODY" | grep -Fq '"maintenance":false' &&
+            curl -fsS --max-time 10 "$$HEARTBEAT_URL" >/dev/null
+
+            sleep "$$INTERVAL"
+          done
+    restart: unless-stopped
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.25
+    networks:
+      - owncloudnet
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  owncloudnet:
+    name: owncloudnet
+    driver: bridge
+  nginx:
+    external: true
+    name: nginx
+    
+volumes:
+  nginx-80_443:
+    driver: local
+    driver_opts:
+      type: none
+      device: /home/esede-admin/Docker-volumes/nginx
+      o: bind
+  nginx-logs:
+    driver: local
+    driver_opts:
+      type: none
+      device: /home/esede-admin/Docker-volumes/owncloud_logs/nginx
+      o: bind
+  certs_ssl:
+    driver: local
+    driver_opts:
+      type: none
+      device: /home/esede-admin/Docker-volumes/cert_ssl
+      o: bind
